@@ -8,23 +8,17 @@ public class Blinky : Ghost
     private readonly float[] _currentLevelElroySpeed = { 0.126f, 0.112f, 0.112f, 0.112f, 0.1f };
     private float _elroySpeed;
     private bool _elroyEnabled;
-    protected override void NewLevel()
+    public override void InitByLevel(byte level)
     {
-        base.NewLevel();
-        _eyesSprites = base._eyesSprites;
-        if (GameManager.Level < 5)
-        {
-            _elroySpeed = _currentLevelElroySpeed[GameManager.Level - 1];
-        }
-        else
-        {
-            _elroySpeed = _currentLevelElroySpeed[4];
-        }
+        base.InitByLevel(level);
+        _elroySpeed = _currentLevelElroySpeed[level < 4? level : 4];
     }
     protected override Vector2 ChaseTile()
     {
         return _playerTransform.position;
     }
+    protected override Vector2 _scatterTargetTile => _elroyEnabled ? ChaseTile() : new(11.5f, 16.5f);
+    protected override Vector2 _eatenTargetTile => new(-0.5f, -0.5f);
     protected override void OnEnable()
     {
         base.OnEnable();
@@ -40,16 +34,5 @@ public class Blinky : Ghost
         _scatterChaseSpeed = _elroyEnabled? _elroySpeed - 0.006f : _elroySpeed;
         _elroyEnabled = true;
         _eyesSprites = _furiousEyesSprites;
-    }
-    protected override Vector2 ScatterTile()
-    {
-        if (!_elroyEnabled)
-        {
-            return base.ScatterTile();
-        }
-        else
-        {
-            return ChaseTile();
-        }
     }
 }

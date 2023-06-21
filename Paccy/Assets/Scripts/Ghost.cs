@@ -1,127 +1,165 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using DG.Tweening;
+using Cysharp.Threading.Tasks;
+using System.Threading;
+using static UnityEngine.Random;
 
-public abstract class Ghost : MonoBehaviour
+[RequireComponent(typeof(BlueGhost))]
+public abstract class Ghost : BaseLevelDependant
 {
     [SerializeField] private SpriteRenderer _ghostSpriteRenderer, _eyesSpriteRenderer;
-    [SerializeField] private BoxCollider2D _collider;
-    [SerializeField] private AudioSource _audioSource;
+    [SerializeField] private Collider2D _collider;
+    [SerializeField] private BlueGhost _frightenMode;
     [SerializeField] private Animator _animator;
-    [SerializeField] private LayerMask _terrainLayer;
-    [SerializeField] protected Vector2 _scatterTargetTile, _eattenTargetTile;
+    [SerializeField] private LayerMask _obstacleLayer; 
     [SerializeField] protected Transform _playerTransform, _tileObjectPrefab;
     [SerializeField] protected Sprite[] _eyesSprites = new Sprite[4];
-    private readonly float[][] _levelScatterAndChaseDuration =
+    private CancellationTokenSource _frightenedCancellationToken = new(), _scatterChaseRotationCancellationToken = new();
+    private readonly Dictionary<int, float[]> _levelScatterAndChaseDuration = new()
     {
-    new float[] { 7, 20, 7, 20, 5, 20, 5 },
-    new float[] { 7, 20, 7, 20, 5, 1033, 0.01f },
-    new float[] { 7, 20, 7, 20, 5, 1033, 0.01f },
-    new float[] { 7, 20, 7, 20, 5, 1033, 0.01f },
-    new float[] { 7, 20, 5, 20, 5, 1037, 0.01f }
+        {0, new float[] { 7, 20, 7, 20, 5, 20, 5 } },
+        {1, new float[] { 7, 20, 7, 20, 5, 1033, 0.01f } },
+        {2, new float[] { 7, 20, 7, 20, 5, 1033, 0.01f } },
+        {3, new float[] { 7, 20, 7, 20, 5, 1033, 0.01f } },
+        {4, new float[] { 7, 20, 5, 20, 5, 1037, 0.01f } }
     };
+    private readonly byte[] _currentLevelFrightenedDuration = {6, 5, 4, 3, 2, 5, 2, 2, 1, 5, 2, 1, 1, 3, 1, 1, 0, 1 };
+    private readonly byte[] _currentLevelFrightenedBlinks = { 5, 5, 5, 5, 5, 5, 5, 5, 3, 5, 5, 3, 3, 5, 3, 3, 0, 3 };
     private readonly float[] _currentLevelGhostNormalSpeed = { 0.134f, 0.118f, 0.118f, 0.118f, 0.106f };
     private readonly float[] _currentLevelTunnelSpeed = { 0.251f, 0.223f, 0.223f, 0.223f, 0.2f };
     private readonly float[] _currentLevelFrightenedSpeed = { 0.2f, 0.183f, 0.183f, 0.183f, 0.167f };
-    private readonly float[] _currentLevelFrightenedDuration = {6, 5, 4, 3, 2, 5, 2, 2, 1, 5, 2, 1, 1, 3, 1, 1, 0, 1 };
-    private readonly int[] _currentLevelFrightenedBlinks = { 5, 5, 5, 5, 5, 5, 5, 5, 3, 5, 5, 3, 3, 5, 3, 3, 0, 3 };
-    private float _timerStartTime, _currentSpeed, _tunnelSpeed, _scatterChaseTimer, _frightenedTimer, _frightenedSpeed;
-    private bool _timerRunning, _scatter, _chase, _frightened, _eaten, _retreat, _home; 
-    private int currentTimer;
-    private Vector2 _targetTile, _cantMoveTo, _startDirection, _startPosition;
-    protected float  _scatterChaseSpeed;
-    protected List <Vector2> _sides = new();
-    protected Vector2[] _cantTurnUp =
+    private float[] _scatterChaseTimers;
+    private float _currentSpeed, _tunnelSpeed, _frightenedSpeed;
+    private byte _timerIterations, _frightenedTimer, _frightenedBlinks, _frightenedDuration;
+    private bool _inScatter, _onChase, _isEaten, _isRetreating, _isHome, _isFrightenable;
+    private Vector2 _currentTargetTile, _lastSideSelected;
+    protected float _scatterChaseSpeed;
+    private const float _eatenSpeed = 0.04f, _width = 27, _height = 35;
+    private List<Vector2> _sides = new(4);
+    /*    protected Vector2[] _cantTurnUp =
         { 
-        new Vector2(1.5f, -9.5f),
-        new Vector2(-1.5f, -9.5f),
-        new Vector2(-1.5f, 2.5f),
-        new Vector2(1.5f, 2.5f)
-        };
-    protected virtual void NewLevel()
+            new Vector2(1.5f, -9.5f),
+            new Vector2(-1.5f, -9.5f),
+            new Vector2(-1.5f, 2.5f),
+            new Vector2(1.5f, 2.5f)
+        };*/
+    private Vector2 _homeTile => transform.position * Vector2.down;
+    protected abstract Vector2 ChaseTile();
+    protected abstract Vector2 _eatenTargetTile { get; }
+    protected abstract Vector2 _scatterTargetTile { get; }
+    private Vector2 GetTargetTile()
     {
-        if (GameManager.Level < 5)
+        if (_isHome)
         {
-            _tunnelSpeed = _currentLevelTunnelSpeed[GameManager.Level - 1];
-            _scatterChaseSpeed = _currentLevelGhostNormalSpeed[GameManager.Level - 1];
-            _scatterChaseTimer = GameManager.Level - 1;
-            _frightenedSpeed = _currentLevelFrightenedSpeed[GameManager.Level - 1];
+            _currentSpeed = 0.14f;
+            return _homeTile;
         }
-        else
-        {  
-            _tunnelSpeed = _currentLevelTunnelSpeed[4];
-            _scatterChaseSpeed = _currentLevelGhostNormalSpeed[4];
-            _scatterChaseTimer = 4;
-            _frightenedSpeed = _currentLevelFrightenedSpeed[4];
-        }
-    }
-        void StartTimer()
+        else if (_frightenMode.enabled)
         {
-            _timerStartTime = Time.time;
-            _timerRunning = true;
+            _currentSpeed = _frightenedSpeed;
+            return new Vector2(Range(-_width * 0.5f, _width * 0.5f), Range(-_height * 0.5f, _height * 0.5f));
         }
-        void TimerComplete()
+        else if (_isEaten)
         {
-            _timerRunning = false;
-            // Do something here when the timer completes
-            _scatter = _chase? !_scatter : _scatter;
-            _chase = _scatter? !_chase : _chase;
-            _retreat = true;
-            // Move to the next timer
-            currentTimer++;
-            // Check if there are more timers
-            if (currentTimer < _levelScatterAndChaseDuration[(int)_scatterChaseTimer].Length)
+            if ((Vector2)transform.position != _eatenTargetTile)
             {
-                StartTimer();
+                return _eatenTargetTile;
+            }
+            else
+            {
+                BackFromEaten();
             }
         }
-    public IEnumerator GameStart()
-    {
-        _chase = false;
-        _frightened = false;
-        _eaten = false;
-        _scatter = false;
-        _timerRunning = false;
-        currentTimer = 0;
-        _animator.speed = 0;
-        gameObject.SetActive(true);
-        transform.position = _startPosition;
-        _cantMoveTo = Vector2.right;
-        yield return new WaitForSeconds(4.5f);
-        _animator.speed = 1;
-        _scatter = true;
-        StartTimer();
-        Move();
+        else if (_onChase)
+        {
+            _currentSpeed = _scatterChaseSpeed;
+            return ChaseTile();
+        }
+        else if (_inScatter)
+        {
+            _currentSpeed = _scatterChaseSpeed;
+            return _scatterTargetTile;
+        }
+        return Vector2.zero;
     }
-    private void Awake()
+    public override void InitByLevel(byte level)
     {
-        _startPosition = transform.position;
-        NewLevel();
+        if (_isFrightenable = level < 16 || level == 17)
+        {
+            _frightenedSpeed = _currentLevelFrightenedSpeed[level < 4 ? level : 4];
+            _frightenedBlinks = _currentLevelFrightenedBlinks[level];
+            _frightenedDuration = (byte)Mathf.Abs((_currentLevelFrightenedDuration[level] - 6) / 6);
+            _frightenedTimer = (byte)(_currentLevelFrightenedDuration[level] + (_currentLevelFrightenedBlinks[level] == 5 ? 2 : 1));
+        }
+        if (level < 4)
+        {
+            _tunnelSpeed = _currentLevelTunnelSpeed[level];
+            _scatterChaseSpeed = _currentLevelGhostNormalSpeed[level];
+            _scatterChaseTimers = _levelScatterAndChaseDuration[level];
+            return;
+        }
+        _tunnelSpeed = _currentLevelTunnelSpeed[4];
+        _scatterChaseSpeed = _currentLevelGhostNormalSpeed[4];
+        _scatterChaseTimers = _levelScatterAndChaseDuration[4];
     }
-    private void Start()
+    public override void NewRound()
     {
         //_home = true;
-        StartCoroutine(GameStart());
+        _frightenMode.enabled = false;
+        _onChase = false;
+        _isEaten = false;
+        _inScatter = true;
+        _lastSideSelected = Vector2.zero;
+        _animator.speed = 1;
+        StartTimer().Forget();
+        Move();
     }
-    private void Update()
-    {   
-        if (_frightenedTimer > 0)
+    private void MoveOnceToSide(Vector2 side)
+    {
+        _lastSideSelected = side;
+        if (transform.position.x == 14.5f || transform.position.x == -14.5f)
         {
-            _frightenedTimer -= Time.deltaTime;
+            transform.DOMoveX(13.5f * -Mathf.Sign(transform.position.x), 0).SetEase(Ease.Linear).OnComplete(Move);
+            return;
         }
-        else
+        transform.DOLocalMove((Vector2)transform.position + side, _currentSpeed).SetEase(Ease.Linear).OnComplete(Move);
+    }
+    private async UniTaskVoid StartTimer()
+    {
+        _scatterChaseRotationCancellationToken?.Cancel();
+        _scatterChaseRotationCancellationToken.Dispose();
+        _scatterChaseRotationCancellationToken = new();
+        for (_timerIterations = 0; _timerIterations < 7; _timerIterations++)
         {
-            _frightened = false;
-            gameObject.layer = 8;
+            await UniTask.Delay(TimeSpan.FromSeconds(_scatterChaseTimers[_timerIterations]), cancellationToken: _scatterChaseRotationCancellationToken.Token);
+            _inScatter = _onChase ? !_inScatter : _inScatter;
+            _onChase = _inScatter ? !_onChase : _onChase;
+            _isRetreating = !_frightenMode.enabled;
         }
-        if (_timerRunning)
+    }
+    public bool TryGetEaten()
+    {
+        if (!_frightenMode.enabled)
         {
-            if (Time.time - _timerStartTime >= _levelScatterAndChaseDuration[(int)_scatterChaseTimer][currentTimer])
-            {
-                TimerComplete();
-            }
+            return false;
         }
+        DOTween.Kill(this);
+        _frightenMode.enabled = false;
+        _collider.enabled = false;
+        _isEaten = true;
+        _currentSpeed = _eatenSpeed;
+        _animator.SetTrigger("Eaten");
+        return true;
+    }
+    public void BackFromEaten()
+    {
+        _collider.enabled = true;
+        _isEaten = false;
+        _currentSpeed = _scatterChaseSpeed;
+        _animator.SetTrigger("Normal");
     }
     protected virtual void OnEnable()
     {
@@ -131,186 +169,85 @@ public abstract class Ghost : MonoBehaviour
     {
         BigPellet.EatenBigPellet -= Fright;
     }
-    protected bool IsObstacle(Vector2 direction)
-    {
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, direction, 1, _terrainLayer);
-        return hit.collider != null;
-    }
     private void Move()
     {
-        _targetTile = ChangeTargetTile();
-        _tileObjectPrefab.position = _targetTile;
+        if (_isRetreating)
+        {
+            _isRetreating = false;
+            MoveOnceToSide(-_lastSideSelected);
+            return;
+        }
+        _currentTargetTile = GetTargetTile();
+        _tileObjectPrefab.position = _currentTargetTile;
         _sides.Clear();
         _sides.Add(Vector2.up);
         _sides.Add(Vector2.left);
         _sides.Add(Vector2.down);
         _sides.Add(Vector2.right);
-        _sides.Remove(_cantMoveTo);
-        for (int i = _sides.Count - 1; i >= 0; i--)
-        {
-            if (IsObstacle(_sides[i]))
-            {
-                _sides.RemoveAt(i);
-                continue;
-            }
-        }
+        _sides.Remove(-_lastSideSelected);
+        _sides.RemoveAll(side => IsObstacle(side));
         if (_sides.Count > 1)
         {
-            float initialDistance = Vector2.Distance(_targetTile, new Vector2(transform.position.x, transform.position.y) + _sides[_sides.Count -1]);
+            float lowestDistance = Vector2.Distance(_currentTargetTile, (Vector2)transform.position + _sides[_sides.Count - 1]);
             for (int i = _sides.Count - 1; i >= 0; i--)
             {
-                float currentDistance = Vector2.Distance(_targetTile, new Vector2(transform.position.x, transform.position.y) + _sides[i]);
-                if (currentDistance < initialDistance)
+                float currentDistance = Vector2.Distance(_currentTargetTile, (Vector2)transform.position + _sides[i]);
+                if (currentDistance < lowestDistance)
                 {
-                    initialDistance = currentDistance;
+                    lowestDistance = currentDistance;
                     _sides.RemoveAt(_sides.Count - 1);
-                    continue;
                 }
-                else if (currentDistance > initialDistance)
+                else if (currentDistance > lowestDistance)
                 {
                     _sides.RemoveAt(i);
-                    continue;
-                }
-                else if (currentDistance == initialDistance)
-                {
-                    continue;
                 }
             }
         }
         if (_sides.Contains(Vector2.up))
         {
             _eyesSpriteRenderer.sprite = _eyesSprites[0];
-            transform.DOLocalMove(new Vector2(transform.position.x, transform.position.y) + Vector2.up, _currentSpeed).SetEase(Ease.Linear).OnComplete(() =>
-            {
-                _cantMoveTo = _retreat? Vector2.up: Vector2.down;
-                _retreat = _retreat ? !_retreat : _retreat;
-                Move();
-            });
+            MoveOnceToSide(Vector2.up);
         }
         else if (_sides.Contains(Vector2.left))
         {
             _eyesSpriteRenderer.sprite = _eyesSprites[1];
-            if (transform.position.x < -14)
-            {
-                transform.DOMoveX(transform.position.x + 27, 0).SetEase(Ease.Linear).OnComplete(() =>
-                {
-                    _cantMoveTo = _retreat ? Vector2.left : Vector2.right;
-                    _retreat = _retreat ? !_retreat : _retreat;
-                    Move();
-                });
-            }
-            else
-            {
-                transform.DOLocalMove(new Vector2(transform.position.x, transform.position.y) + Vector2.left, _currentSpeed).SetEase(Ease.Linear).OnComplete(() =>
-                {
-                    _cantMoveTo = _retreat ? Vector2.left : Vector2.right;
-                    _retreat = _retreat ? !_retreat : _retreat;
-                    Move();
-                });
-            }
+            MoveOnceToSide(Vector2.left);
         }
         else if (_sides.Contains(Vector2.down))
         {
             _eyesSpriteRenderer.sprite = _eyesSprites[2];
-            transform.DOLocalMove(new Vector2(transform.position.x, transform.position.y) + Vector2.down, _currentSpeed).SetEase(Ease.Linear).OnComplete(() =>
-            {
-                _cantMoveTo = _retreat ? Vector2.down : Vector2.up;
-                _retreat = _retreat ? !_retreat : _retreat;
-                Move();
-            });
+            MoveOnceToSide(Vector2.down);
         }
-        else if (_sides.Contains(Vector2.right))
+        else
         {
             _eyesSpriteRenderer.sprite = _eyesSprites[3];
-            if (transform.position.x > 14)
-            {
-                transform.DOMoveX(transform.position.x - 27, 0).SetEase(Ease.Linear).OnComplete(() =>
-                {
-                    _cantMoveTo = _retreat ? Vector2.right : Vector2.left;
-                    _retreat = _retreat ? !_retreat : _retreat;
-                    Move();
-                });
-            }
-            else
-            {
-                transform.DOLocalMove(new Vector2(transform.position.x, transform.position.y) + Vector2.right, _currentSpeed).SetEase(Ease.Linear).OnComplete(() =>
-                {
-                    _cantMoveTo = _retreat ? Vector2.right : Vector2.left;
-                    _retreat = _retreat ? !_retreat : _retreat;
-                    Move();
-                });
-            }
+            MoveOnceToSide(Vector2.right);
         }
     }
-    private Vector2 ChangeTargetTile()
+    protected bool IsObstacle(Vector2 direction)
     {
-        if (_home)
-        {
-            _cantMoveTo -= _cantMoveTo;
-            _currentSpeed = 0.14f;
-            return new Vector2(transform.position.x, -transform.position.y);
-        }
-        if (_frightened)
-        {
-            _currentSpeed = _frightenedSpeed;
-            return new(Random.Range(-13.5f, 13.51f), Random.Range(-17.5f, 17.51f));
-        }
-        else if(_eaten)
-        {
-            if (new Vector2(transform.position.x, transform.position.y) != _eattenTargetTile)
-            {
-                if (!_audioSource.isPlaying)
-                {
-                    _audioSource.Play();
-                } 
-                return _eattenTargetTile;
-            }
-            else
-            {
-                _audioSource.Stop();
-                _eaten = false;
-/*                _home = true;*/
-                _collider.enabled = true;
-                _currentSpeed = _scatterChaseSpeed;
-                gameObject.layer = 8;
-                _animator.SetTrigger("Normal");
-            }
-        }
-        else if (_chase)
-        {
-            _currentSpeed = _scatterChaseSpeed;
-            return ChaseTile();
-        }
-        else if (_scatter)
-        {
-            _currentSpeed = _scatterChaseSpeed;
-            return ScatterTile();
-        }
-        return Vector2.zero;
-    }
-    protected abstract Vector2 ChaseTile();
-    protected virtual Vector2 ScatterTile()
-    {
-        return _scatterTargetTile;
-    }
-    public void Eaten()
-    {
-        _frightened = false;
-        _eaten = true;
-        _currentSpeed = 0.04f;
-        _collider.enabled = false;
-        _animator.SetTrigger("Eaten");
+        RaycastHit2D hit = Physics2D.Raycast(transform.position, direction, 1, _obstacleLayer);
+        return hit.collider != null;
     }
     public void Fright()
     {
-        if (!_eaten)
-        { 
-            _frightened = true;
-            _retreat = true;
-            gameObject.layer = 12;
-            _frightenedTimer = _currentLevelFrightenedDuration[GameManager.Level - 1] + (_currentLevelFrightenedBlinks[GameManager.Level - 1] == 5? 2 : 1);
-            _animator.SetInteger("Blinks", _currentLevelFrightenedBlinks[GameManager.Level - 1]);
-            _animator.Play("GhostFright", 0, Mathf.Abs((_currentLevelFrightenedDuration[GameManager.Level - 1] - 6) / 6));
+        if (_isEaten || !_isFrightenable)
+        {
+            return;
         }
+        _frightenMode.enabled = true;
+        _isRetreating = true;
+        StartFrightTimer().Forget();
+        _animator.SetInteger("Blinks", _frightenedBlinks);
+        _animator.Play("GhostFright", 0, _frightenedDuration);
+    }
+    private async UniTaskVoid StartFrightTimer()
+    {
+        // Cancel previous timer if exists
+        _frightenedCancellationToken?.Cancel();
+        _frightenedCancellationToken.Dispose();
+        _frightenedCancellationToken = new();
+        await UniTask.Delay(TimeSpan.FromSeconds(_frightenedTimer), cancellationToken: _frightenedCancellationToken.Token);
+        _frightenMode.enabled = false;
     }
 }

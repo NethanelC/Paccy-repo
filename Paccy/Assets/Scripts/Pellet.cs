@@ -3,15 +3,14 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class Pellet : Consumable
+public class Pellet : ConsumableBase
 {
     public static event Action EatenPellet;
-    private void Awake()
+    protected override void Consumed()
     {
-        GameManager.AllPellets.Add(gameObject);
-    }
-    protected override Action Consumed()
-    {
-        return EatenPellet;
+        SoundManager.Instance.PlaySound(SoundManager.Sound.Munch);
+        ScoreManager.Instance.AddScore(_scoreWorth);
+        EatenPellet?.Invoke();
+        gameObject.SetActive(false);
     }
 }

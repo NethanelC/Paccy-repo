@@ -1,56 +1,131 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
+using TMPro;
+using DG.Tweening;
+using static UnityEngine.SceneManagement.SceneManager;
+
 public class GameManager : MonoBehaviour
 {
+    public static event Action ElroyRemainingPellets;
+    [SerializeField] private Player _pacmanPlayer;
+    [SerializeField] private GameObject[] _attemptsImages = new GameObject[3];
+    [SerializeField] private Ghost[] _ghostsCollection = new Ghost[4];
     [SerializeField] private SpriteRenderer[] _currentLevelSymbol = new SpriteRenderer[21];
     [SerializeField] private SpriteRenderer[] _symbolCollection = new SpriteRenderer[7];
-    public static List<GameObject> AllPellets = new();
-    public static event Action NoRemainingPellets, ElroyRemainingPellets;
-    private static int _currentLevel = 1;
-    private int _currentPellets = 240, _collectedSymbols;
-    private readonly static int[] _currentLevelElroyPellets = { 20, 30, 40, 40, 40, 50, 50, 50, 60, 60, 60, 80, 80, 80, 100, 100, 100, 100, 120 };
-    public static int Level
+    [SerializeField] private TextMeshProUGUI _stateText;
+    private const byte _maxPellets = 240;
+    private byte _currentLevel, _pelletsRemaining, _attemptsLeft;
+    private int _collectedSymbols;
+    private readonly int[] _currentLevelElroyPellets = { 20, 30, 40, 40, 40, 50, 50, 50, 60, 60, 60, 80, 80, 80, 100, 100, 100, 100, 120 };
+    private void Awake()
     {
-        get => _currentLevel;
-        set => _currentLevel = value;
+        _pelletsRemaining = _maxPellets;
+        _attemptsLeft = 3;
+        ConsumeAttemptAndReturnIfSufficient();
     }
-    private void ReducePellets()
+    private void Start()
     {
-        _currentPellets--;
-        if (_currentPellets == 170 || _currentPellets == 70)
+        if (_currentLevel == 0)
         {
-            Instantiate(_currentLevelSymbol[Level - 1], new Vector2(0, -3.5f), Quaternion.identity);
+            SoundManager.Instance.PlaySound(SoundManager.Sound.GameStart);
+            NewLevel();
         }
-        else if(_currentPellets == _currentLevelElroyPellets[Level - 1] || _currentPellets == _currentLevelElroyPellets[Level - 1] * 0.5f)
-        {
-            ElroyRemainingPellets?.Invoke();
-        }
-        else if (_currentPellets == 0)
-        {
-            foreach (GameObject pellet in AllPellets)
-            {
-                pellet.SetActive(true);
-            }
-            _currentPellets = 240;
-            Level++;
-            NoRemainingPellets?.Invoke();
-        }
-    }
-    private void AddSymbol()
-    {
-        _symbolCollection[_collectedSymbols].sprite = _currentLevelSymbol[Level - 1].sprite;
-        _collectedSymbols += 1 % _symbolCollection.Length;  
     }
     private void OnEnable()
     {
-        Pellet.EatenPellet += ReducePellets;
-        Symbol.EatenSymbol += AddSymbol;
+        Pellet.EatenPellet += OnEatenPellet;
+        Symbol.EatenSymbol += OnEatenSymbol;
+        _pacmanPlayer.PacmanDeath += OnDeath;
     }
     private void OnDisable()
     {
-        Pellet.EatenPellet -= ReducePellets;
-        Symbol.EatenSymbol -= AddSymbol;
+        Pellet.EatenPellet -= OnEatenPellet;
+        Symbol.EatenSymbol -= OnEatenSymbol;
+        _pacmanPlayer.PacmanDeath -= OnDeath;
     }
+    private void SetTextReady()
+    {
+        _stateText.color = Color.yellow;
+        _stateText.text = "READY";
+        _stateText.gameObject.SetActive(true);
+    }
+    private void SetTextGameOver()
+    {
+        _stateText.color = Color.red;
+        _stateText.text = "GAME OVER";
+        _stateText.gameObject.SetActive(true);
+    }
+    private void NewLevel()
+    {
+        _pacmanPlayer.InitByLevel(_currentLevel);
+        for(int i = 0; i < _ghostsCollection.Length; ++i)
+        {
+            _ghostsCollection[i].InitByLevel(_currentLevel);
+        }
+        NewRound().Forget();
+        //LoadScene(GetActiveScene().buildIndex);
+    }
+    private async UniTaskVoid NewRound()
+    {
+        _pacmanPlayer.BasePositionAndFacingSide();
+        for (int i = 0; i < _ghostsCollection.Length; ++i)
+        {
+            _ghostsCollection[i].BasePositionAndFacingSide();
+        }
+        await UniTask.Delay(TimeSpan.FromSeconds(SoundManager.Instance.StartSoundLengthInSeconds));
+        _pacmanPlayer.NewRound();
+        for (int i = 0; i < _ghostsCollection.Length; ++i)
+        {
+            _ghostsCollection[i].NewRound();
+        }
+        _stateText.gameObject.SetActive(false);
+    }
+    private void OnEatenPellet()
+    {
+        _pelletsRemaining--;
+        if (_pelletsRemaining == 170 || _pelletsRemaining == 70)
+        {
+            Instantiate(_currentLevelSymbol[_currentLevel], new Vector2(0, -3.5f), Quaternion.identity);
+        }
+        else if(_pelletsRemaining == _currentLevelElroyPellets[_currentLevel] || _pelletsRemaining == _currentLevelElroyPellets[_currentLevel] * 0.5f)
+        {
+            ElroyRemainingPellets?.Invoke();
+        }
+        else if (_pelletsRemaining == 0)
+        {
+            NewRound().Forget();
+        }
+    }
+    private void OnEatenSymbol()
+    {
+        _symbolCollection[_collectedSymbols].sprite = _currentLevelSymbol[_currentLevel].sprite;
+        _collectedSymbols += 1 % _symbolCollection.Length;  
+    }
+    private async void OnDeath()
+    {
+        DOTween.KillAll();
+        for (int i = 0; i < _ghostsCollection.Length; i++)
+        {
+            _ghostsCollection[i].gameObject.SetActive(false);
+        }
+        SoundManager.Instance.PlaySound(SoundManager.Sound.Death);
+        await UniTask.Delay(TimeSpan.FromSeconds(SoundManager.Instance.DeathSoundLengthInSeconds));
+        if (ConsumeAttemptAndReturnIfSufficient())
+        {
+            SetTextReady();
+            NewRound().Forget();
+            return;
+        }
+        SetTextGameOver();
+    }
+    private bool ConsumeAttemptAndReturnIfSufficient()
+    {
+        if (_attemptsLeft-- > 0)
+        {
+            _attemptsImages[_attemptsLeft].SetActive(false);
+            return true;
+        }
+        return false;
+    }    
 }

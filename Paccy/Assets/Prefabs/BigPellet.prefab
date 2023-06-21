@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 8250812297833161919}
   - component: {fileID: -6043118047209417479}
   - component: {fileID: -2909818550561808428}
-  m_Layer: 7
+  m_Layer: 0
   m_Name: BigPellet
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -133,6 +133,7 @@ Animator:
   m_HasTransformHierarchy: 1
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0
 --- !u!114 &-2909818550561808428
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -145,4 +146,5 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e5300a0e4107c854384c7d6e4bb01902, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _scorePopup: {fileID: -7576371823183368718, guid: 453497100714f1d479aefaa8312cbed2, type: 3}
   _scoreWorth: 50

@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 8687193478785616991}
   - component: {fileID: 8687193478785616988}
   - component: {fileID: -6583193685806593257}
-  m_Layer: 6
+  m_Layer: 0
   m_Name: Pellet
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -124,4 +124,5 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cbf768b77568b8c47b8dd5eb5433576d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _scorePopup: {fileID: -7576371823183368718, guid: 453497100714f1d479aefaa8312cbed2, type: 3}
   _scoreWorth: 10

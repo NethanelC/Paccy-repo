@@ -3,22 +3,13 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class BigPellet : Consumable
+public class BigPellet : ConsumableBase
 {
     public static event Action EatenBigPellet;
-    private void Awake()
+    protected override void Consumed()
     {
-        GameManager.AllPellets.Add(gameObject);
-    }
-    protected override Action Consumed()
-    {
-        if (GameManager.Level < 17 || GameManager.Level == 18)
-        {
-            return EatenBigPellet;
-        }
-        else
-        {
-            return null;
-        }  
+        ScoreManager.Instance.AddScore(_scoreWorth);
+        EatenBigPellet?.Invoke();
+        gameObject.SetActive(false);
     }
 }
